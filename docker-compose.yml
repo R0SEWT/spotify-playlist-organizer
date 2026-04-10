@@ -5,9 +5,13 @@ services:
       - "5000:5000"
     env_file:
       - .env
+    environment:
+      - URI_DB=mongodb://mongo:27017/spotify_organizer
     depends_on:
-      - mongo
-      - redis
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     volumes:
       - .:/app
     command: gunicorn -b 0.0.0.0:5000 --reload index:app
@@ -18,11 +22,21 @@ services:
       - "27017:27017"
     volumes:
       - mongo_data:/data/db
+    healthcheck:
+      test: mongosh --eval "db.runCommand('ping').ok" --quiet
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   redis:
     image: redis:7-alpine
     ports:
       - "6379:6379"
+    healthcheck:
+      test: redis-cli ping
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
 volumes:
   mongo_data:
