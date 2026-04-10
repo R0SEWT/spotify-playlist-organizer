@@ -31,7 +31,8 @@ def escuchar(id):
     uri = cancion["uri"]
     title = cancion.get("name")
     duration = cancion.get("duration_ms")
-    url_img = cancion.get("album", {}).get("images", [{}, {}])[1].get("url", "")
+    images = cancion.get("album", {}).get("images", []) or []
+    url_img = (images[1] if len(images) > 1 else images[0] if images else {}).get("url", "")
     artistas = map(lambda a: a["name"], cancion.get("artists", [{}]))
 
     return render_template('reproductor.html', id=id, uri=uri, title=title, artistas=list(artistas), duration=duration, url_img=url_img)
@@ -43,10 +44,12 @@ def recomendar():
     if not client:
         return "No autenticado", 401
 
-    data = request.json
+    data = request.get_json(silent=True) or {}
     historial = data.get("historial")
     nombre_cancion = data.get("nombre_cancion")
     artista = data.get("artista")
+    if not nombre_cancion or not artista:
+        return "Faltan campos requeridos", 400
 
     df_user = recomendacion.crear_df_user(historial)
     res_recomendacion = recomendacion.get_best_recommendations(nombre_cancion, artista, recomendacion.matriz_similaridad, df_user)

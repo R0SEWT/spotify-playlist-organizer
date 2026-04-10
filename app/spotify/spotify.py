@@ -4,6 +4,10 @@ from functools import wraps
 from typing import Optional
 
 
+class TokenExpiredError(Exception):
+    """Señal interna para que el decorador renueve el token y reintente."""
+
+
 def renew_token_if_needed(func):
     @wraps(func)
     def wrapper(self, *args, **kwargs):
@@ -13,8 +17,10 @@ def renew_token_if_needed(func):
             if e.http_status == 401:
                 self.renovar_token()
                 return func(self, *args, **kwargs)
-            else:
-                raise
+            raise
+        except TokenExpiredError:
+            self.renovar_token()
+            return func(self, *args, **kwargs)
     return wrapper
 
 
@@ -76,10 +82,23 @@ class SpotifyClient:
 
     def renovar_token(self):
         result = self._auth.refresh_access_token(self.refresh_token)
-        if result:
-            self.token = result["access_token"]
-            self.refresh_token = result.get("refresh_token", self.refresh_token)
-            self._client = Spotify(auth=self.token)
+        if not result:
+            return
+        self.token = result["access_token"]
+        self.refresh_token = result.get("refresh_token", self.refresh_token)
+        self._client = Spotify(auth=self.token)
+
+        # Propagar a la sesión para que el próximo request arranque con el token nuevo.
+        try:
+            from flask import session, has_request_context
+            if has_request_context():
+                user = session.get("user")
+                if isinstance(user, dict):
+                    user["token"] = self.token
+                    user["refresh_token"] = self.refresh_token
+                    session["user"] = user
+        except RuntimeError:
+            pass
 
     @renew_token_if_needed
     def info_usuario(self):
@@ -98,7 +117,7 @@ class SpotifyClient:
                 "title": item['name'],
                 "artist_name": item['artists'][0]['name'],
                 "uri": item["uri"],
-                "img": item["album"]["images"][1]["url"],
+                "img": _pick_image_url(item.get("album", {}).get("images", [])),
             }
             for item in top_tracks['items']
         ]
@@ -118,21 +137,29 @@ class SpotifyClient:
             "https://api.spotify.com/v1/recommendations?limit=8&seed_genres=anime,pop,raggeton,j-pop",
             headers=headers,
         )
+        if res.status_code == 401:
+            raise TokenExpiredError()
         if res.status_code != 200:
             return []
 
         info_artistas = []
-        for data in res.json()["tracks"]:
-            images = data.get("album", {}).get("images", [{}])
-            img = list(filter(lambda img: img["height"] >= 300, images))[0]
-            data_artista = data["artists"]
-            info_artistas += [
-                {
-                    "id": artista["id"],
-                    "name": artista["name"],
-                    "link": artista["external_urls"]["spotify"],
-                    "img": img.get("url", ""),
-                }
-                for artista in data_artista
-            ]
+        for data in res.json().get("tracks", []):
+            img_url = _pick_image_url(data.get("album", {}).get("images", []), min_height=300)
+            for artista in data.get("artists", []):
+                info_artistas.append({
+                    "id": artista.get("id"),
+                    "name": artista.get("name"),
+                    "link": artista.get("external_urls", {}).get("spotify", ""),
+                    "img": img_url,
+                })
         return info_artistas
+
+
+def _pick_image_url(images: list, min_height: int = 0) -> str:
+    """Devuelve la URL de una imagen segura; prefiere una con height >= min_height."""
+    if not images:
+        return ""
+    for img in images:
+        if img.get("height", 0) >= min_height:
+            return img.get("url", "")
+    return images[0].get("url", "")

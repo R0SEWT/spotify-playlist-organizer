@@ -25,9 +25,11 @@ def callback():
     auth: SpotifyAuth = current_app.config["spotify_auth"]
     redirect_uri = (request.host_url + "login").replace("http://", "https://")
 
-    data: dict = request.json
+    data = request.get_json(silent=True) or {}
     code = data.get("code")
     code_verifier = data.get("codeVerifier")
+    if not code or not code_verifier:
+        return {"status": False, "error": "missing code or codeVerifier"}, 400
 
     data_token = auth.obtener_token(code, code_verifier, redirect_uri_override=redirect_uri)
     if not data_token:
@@ -60,5 +62,5 @@ def callback():
 
 @auth_routes.get("/logout")
 def logout():
-    del session["user"]
+    session.pop("user", None)
     return redirect("/")
