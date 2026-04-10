@@ -1,16 +1,16 @@
-# ADR-NNN: Titulo de la decision
+# ADR-NNN: Título de la decisión
 
-- **Estado**: propuesto | aceptado | deprecado | reemplazado por [ADR-NNN](ADR-NNN-titulo.md)
+- **Estado**: propuesto | aceptado | deprecado | reemplazado por [ADR-NNN](ADR-NNN-título.md)
 - **Fecha**: YYYY-MM-DD
 - **Autor**: Nombre
 
 ## Contexto
 
-Que situacion o problema motiva esta decision? Que restricciones existen?
+¿Qué situación o problema motiva esta decisión? ¿Qué restricciones existen?
 
-## Decision
+## Decisión
 
-Que se decidio hacer?
+¿Qué se decidió hacer?
 
 ## Alternativas consideradas
 
@@ -24,4 +24,4 @@ Que se decidio hacer?
 
 ## Consecuencias
 
-Que implica esta decision? Que trade-offs se aceptan?
+¿Qué implica esta decisión? ¿Qué trade-offs se aceptan?
