@@ -32,7 +32,7 @@ tqdm
 tzdata==2024.1
 urllib3==2.6.3
 yellowbrick
-Werkzeug==3.0.1
+Werkzeug==3.1.6
 gunicorn==22.0.0
 
 
