@@ -1,8 +1,12 @@
 import requests
-from spotipy import Spotify, util, SpotifyException
-from functools import wraps 
+from spotipy import Spotify, SpotifyException
+from functools import wraps
 from typing import Optional
-from pprint import pprint
+
+
+class TokenExpiredError(Exception):
+    """Señal interna para que el decorador renueve el token y reintente."""
+
 
 def renew_token_if_needed(func):
     @wraps(func)
@@ -10,159 +14,152 @@ def renew_token_if_needed(func):
         try:
             return func(self, *args, **kwargs)
         except SpotifyException as e:
-            print(e.http_status)
-            if e.http_status == 401:  # Unauthorized
-                self.obtener_nuevo_token()
+            if e.http_status == 401:
+                self.renovar_token()
                 return func(self, *args, **kwargs)
-            else:
-                raise
+            raise
+        except TokenExpiredError:
+            self.renovar_token()
+            return func(self, *args, **kwargs)
     return wrapper
 
-class SpotifyApi:
+
+class SpotifyAuth:
     """
-    Una clase para interactuar con la API de Spotify.
-    
-    Atributos:
-        TOKEN_ENDPOINT (str): El endpoint para obtener tokens de Spotify.
-        __client_id (str): El ID de cliente para la aplicación de Spotify.
-        __client_secret (str): El secreto de cliente para la aplicación de Spotify.
-        scope (str): El alcance de la solicitud de acceso.
-        __username (str): El nombre de usuario de Spotify.
-        redirect_uri (str): La URI de redirección para la aplicación de Spotify.
-        spotify_client (Spotify): La instancia del cliente de Spotify.
-        token (str): El token de acceso.
-        refresh_token (str): El token de actualización.
-    
-    Métodos:
-        get_url_oauth(): Genera la URL de OAuth para la autorización del usuario.
-        obtener_nuevo_token(): Obtiene un nuevo token de acceso usando el token de actualización.
-        req_obtener_nuevo_token(refresh_token): Solicita un nuevo token de acceso usando el token de actualización.
-        obtener_token(code, code_verifier): Obtiene un token de acceso usando el código de autorización.
-        init_sp_client(token): Inicializa el cliente de Spotify con el token dado.
-        info_usuario(): Obtiene la información del usuario actual.
-        buscar_cancion(nombre): Busca una canción por su nombre.
-        user_top_tracks(top): Obtiene las canciones principales del usuario actual.
-        obtener_cancion(id): Obtiene información sobre una canción específica por su ID.
-        obtener_info_canciones(q): Obtiene información sobre múltiples canciones.
-        obtener_artistas(): Obtiene artistas recomendados basados en géneros semilla.
+    Maneja la configuración OAuth de Spotify (client_id, secret, scopes).
+    No guarda tokens — esos viven en la sesión de cada usuario.
     """
     TOKEN_ENDPOINT = "https://accounts.spotify.com/api/token"
 
-    def __init__(self, client_id:str, secret_client:str, username:str, scope:str, redirect_uri:str) -> None:
+    def __init__(self, client_id: str, client_secret: str, scope: str, redirect_uri: str) -> None:
         self.__client_id = client_id
-        self.__client_secret = secret_client
+        self.__client_secret = client_secret
         self.scope = scope
-        self.__username = username
         self.redirect_uri = redirect_uri
-        
-        self.spotify_client:Spotify = None
-        self.token:str = None
-        self.refresh_token:str = None
 
-        print(self.get_url_oauth()) 
-        token = util.prompt_for_user_token(self.__username, self.scope, self.__client_id, self.__client_secret, self.redirect_uri)
-        self.init_sp_client(token)
+    @property
+    def client_id(self):
+        return self.__client_id
 
     def get_url_oauth(self):
         return f"https://accounts.spotify.com/authorize?client_id={self.__client_id}&scope={self.scope}&response_type=code"
-    
-    def obtener_nuevo_token(self):
-        if tk:=self.refresh_token:
-            res = self.req_obtener_nuevo_token(tk)
-            if res:
-                self.refresh_token = res["refresh_token"]
-                self.init_sp_client(res["access_token"])
-        else:
-            token = util.prompt_for_user_token(self.__username, self.scope, self.__client_id, self.__client_secret, self.redirect_uri)
-            self.init_sp_client(token)
-    
-    def req_obtener_nuevo_token(self, refresh_token) -> Optional[dict]:
-        headers = {
-            "Content-Type": "application/x-www-form-urlencoded"
-        }
 
-        data = {
-            "client_id": self.__client_id,
-            "grant_type": "refresh_code",
-            "refresh_token": refresh_token
-        }
-        res = requests.post(SpotifyApi.TOKEN_ENDPOINT, data=data, headers=headers)
-        return res.json() if res.status_code == 200 else None
-
-    def obtener_token(self, code, code_verifier):
-        headers = {
-            "Content-Type": "application/x-www-form-urlencoded"
-        }
-        print("req redirect_uri", self.redirect_uri)
+    def obtener_token(self, code, code_verifier, redirect_uri_override=None):
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
         data = {
             "client_id": self.__client_id,
             "grant_type": "authorization_code",
             "code": code,
-            "redirect_uri": self.redirect_uri,
-            "code_verifier": code_verifier
+            "redirect_uri": redirect_uri_override or self.redirect_uri,
+            "code_verifier": code_verifier,
         }
+        res = requests.post(self.TOKEN_ENDPOINT, data=data, headers=headers)
+        if res.status_code != 200:
+            return None
+        return res.json()
 
-        res = requests.post(SpotifyApi.TOKEN_ENDPOINT, data=data, headers=headers)
-        pprint(res.json())
-        if res.status_code!=200: return None
-        data = res.json()
-        return data
+    def refresh_access_token(self, refresh_token: str) -> Optional[dict]:
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        data = {
+            "client_id": self.__client_id,
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+        }
+        res = requests.post(self.TOKEN_ENDPOINT, data=data, headers=headers)
+        return res.json() if res.status_code == 200 else None
 
-    def init_sp_client(self, token):
+
+class SpotifyClient:
+    """
+    Cliente Spotify por usuario. Se crea con el token de la sesión.
+    """
+
+    def __init__(self, token: str, refresh_token: str, auth: SpotifyAuth) -> None:
         self.token = token
-        self.spotify_client = Spotify(auth=token)
+        self.refresh_token = refresh_token
+        self._auth = auth
+        self._client = Spotify(auth=token)
+
+    def renovar_token(self):
+        result = self._auth.refresh_access_token(self.refresh_token)
+        if not result:
+            return
+        self.token = result["access_token"]
+        self.refresh_token = result.get("refresh_token", self.refresh_token)
+        self._client = Spotify(auth=self.token)
+
+        # Propagar a la sesión para que el próximo request arranque con el token nuevo.
+        try:
+            from flask import session, has_request_context
+            if has_request_context():
+                user = session.get("user")
+                if isinstance(user, dict):
+                    user["token"] = self.token
+                    user["refresh_token"] = self.refresh_token
+                    session["user"] = user
+        except RuntimeError:
+            pass
 
     @renew_token_if_needed
     def info_usuario(self):
-        return self.spotify_client.current_user()
-    
+        return self._client.current_user()
+
     @renew_token_if_needed
     def buscar_cancion(self, nombre):
-        return self.spotify_client.search(nombre, limit=10)
+        return self._client.search(nombre, limit=10)
 
     @renew_token_if_needed
     def user_top_tracks(self, top):
-        top_tracks = self.spotify_client.current_user_top_tracks(time_range='short_term', limit=top)
+        top_tracks = self._client.current_user_top_tracks(time_range='short_term', limit=top)
         return [
             {
-                "id": item["id"], 
+                "id": item["id"],
                 "title": item['name'],
                 "artist_name": item['artists'][0]['name'],
                 "uri": item["uri"],
-                "img": item["album"]["images"][1]["url"],
-            } 
+                "img": _pick_image_url(item.get("album", {}).get("images", [])),
+            }
             for item in top_tracks['items']
         ]
-    
-    @renew_token_if_needed
-    def obtener_cancion(self, id):
-        return self.spotify_client.track(id)
 
     @renew_token_if_needed
-    def obtener_info_canciones(self, q:list):
-        return self.spotify_client.tracks(q)
+    def obtener_cancion(self, id):
+        return self._client.track(id)
+
+    @renew_token_if_needed
+    def obtener_info_canciones(self, q: list):
+        return self._client.tracks(q)
 
     @renew_token_if_needed
     def obtener_artistas(self):
-        headers = {
-            "Authorization": f"Bearer {self.token}"
-        }
-
-        res = requests.get(f"https://api.spotify.com/v1/recommendations?limit=8&seed_genres=anime,pop,raggeton,j-pop", headers=headers)
-        # &seed_tracks=0c6xIDDpzE81m2q797ordA
-
-        if res.status_code == 200:
-            artistas = res.json()
-            info_artistas = []
-
-            for data in artistas["tracks"]:
-                images = data.get("album",{}).get("images", [{}])
-                img = list(filter(lambda img: img["height"] >= 300, images))[0]
-
-                data_artista = data["artists"]
-                info_artistas+= [{"id":artista["id"], "name": artista["name"], "link":artista["external_urls"]["spotify"], "img":img.get("url", "")} for artista in data_artista]
-
-            return info_artistas
-        else:
-            print("Error al obtener los artistas:", res.text, res.status_code)
+        headers = {"Authorization": f"Bearer {self.token}"}
+        res = requests.get(
+            "https://api.spotify.com/v1/recommendations?limit=8&seed_genres=anime,pop,raggeton,j-pop",
+            headers=headers,
+        )
+        if res.status_code == 401:
+            raise TokenExpiredError()
+        if res.status_code != 200:
             return []
+
+        info_artistas = []
+        for data in res.json().get("tracks", []):
+            img_url = _pick_image_url(data.get("album", {}).get("images", []), min_height=300)
+            for artista in data.get("artists", []):
+                info_artistas.append({
+                    "id": artista.get("id"),
+                    "name": artista.get("name"),
+                    "link": artista.get("external_urls", {}).get("spotify", ""),
+                    "img": img_url,
+                })
+        return info_artistas
+
+
+def _pick_image_url(images: list, min_height: int = 0) -> str:
+    """Devuelve la URL de una imagen segura; prefiere una con height >= min_height."""
+    if not images:
+        return ""
+    for img in images:
+        if img.get("height", 0) >= min_height:
+            return img.get("url", "")
+    return images[0].get("url", "")
