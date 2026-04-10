@@ -9,14 +9,17 @@ A Spanish-language Flask web app that organizes Spotify liked songs into playlis
 ## Commands
 
 ```bash
-# Install Python dependencies
-pip install -r requirements.txt
+# Install Python dependencies (managed with uv)
+uv sync
+
+# Include EDA-only extras (matplotlib, seaborn, plotly_express, yellowbrick, ...)
+uv sync --extra eda
 
 # Install Tailwind (for CSS)
 npm install
 
 # Run the dev server
-python index.py
+uv run python index.py
 
 # Build Tailwind CSS (watches templates in app/templates/ and app/static/js/)
 npx tailwindcss -o app/static/css/output.css --watch
