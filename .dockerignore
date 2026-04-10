@@ -1,0 +1,12 @@
+eda/
+node_modules/
+.env
+.git/
+.gitignore
+__pycache__/
+*.pyc
+.cache*
+diagrama.png
+docs/
+CLAUDE.md
+README.MD
